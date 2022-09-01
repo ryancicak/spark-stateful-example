@@ -2,18 +2,15 @@ package com.github.yuvalitzchakov.structuredstateful
 
 import com.github.yuvalitzchakov.user.{UserEvent, UserSession}
 import org.apache.spark.sql._
-
 import scalaz.{-\/, \/-}
 import argonaut.Argonaut._
-import org.apache.spark.sql.streaming.{
-  GroupState,
-  GroupStateTimeout,
-  OutputMode
-}
+import com.github.yuvalitzchakov.stateful.configuration.SparkConfiguration
+import org.apache.spark.sql.streaming.{GroupState, GroupStateTimeout, OutputMode}
+import pureconfig.loadConfigOrThrow
 
 /**
-  * Created by Yuval.Itzchakov on 29/07/2017.
-  */
+ * Created by Yuval.Itzchakov on 29/07/2017.
+ */
 object StatefulStructuredSessionization {
   implicit val userEventEncoder: Encoder[UserEvent] = Encoders.kryo[UserEvent]
   implicit val userSessionEncoder: Encoder[Option[UserSession]] =
@@ -28,6 +25,8 @@ object StatefulStructuredSessionization {
 
     val host = args(0)
     val port = args(1).toInt
+
+    val sparkConfig = loadConfigOrThrow[SparkConfiguration]("spark")
 
     val spark: SparkSession = SparkSession.builder
       .master("local[*]")
@@ -55,19 +54,20 @@ object StatefulStructuredSessionization {
     finishedUserSessionsStream.writeStream
       .outputMode(OutputMode.Update())
       .format("console")
-      .option("checkpointLocation", "c:\\temp\\structured")
+      .option("checkpointLocation", sparkConfig.checkpointDirectory)
       .start()
       .awaitTermination()
   }
 
   def updateSessionEvents(
-      id: Int,
-      userEvents: Iterator[UserEvent],
-      state: GroupState[UserSession]): Option[UserSession] = {
+                           id: Int,
+                           userEvents: Iterator[UserEvent],
+                           state: GroupState[UserSession]): Option[UserSession] = {
     if (state.hasTimedOut) {
+      val userSession = state.getOption
       // We've timed out, lets extract the state and send it down the stream
       state.remove()
-      state.getOption
+      userSession
     } else {
       /*
        New data has come in for the given user id. We'll look up the current state
@@ -90,9 +90,7 @@ object StatefulStructuredSessionization {
         state.remove()
         userSession
       } else {
-
-        state.setTimeoutDuration("1 minute")
-
+        state.setTimeoutDuration("30 seconds")
         None
       }
     }
